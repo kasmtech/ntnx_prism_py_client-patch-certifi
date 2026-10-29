@@ -1,16 +1,6 @@
-# Note on Dependency Update
-This repository is a modified version of the original NTNX Python package. The primary change made is to the dependency specification for the certifi package.
+# Python Client For Nutanix Prism APIs
 
-The original dependency allowed versions up to and including certifi==2023.11.17, which has since been flagged with a critical vulnerability.
-To address this issue, the upper bound has been removed or adjusted to allow installation of newer, secure versions of certifi.
-
-⚠️ This change was made to ensure the package remains secure and functional in environments where vulnerability scanning is enforced.
-
-No other functional changes have been made unless explicitly noted.
-
-# Python Client For Nutanix Prism Versioned APIs
-
-The Python client for Nutanix Prism Versioned APIs is designed for Python client application developers offering them simple and flexible access to APIs that task Management, Category Associations, Prism Central DR, Alerts, Alert policies, Events and Audits.
+The Python client for Nutanix Prism APIs is designed for Python client application developers offering them simple and flexible access to APIs that manage Tasks, Category Associations and Submit Batch Operations.
 ## Features
 - Invoke Nutanix APIs with a simple interface.
 - Handle Authentication seamlessly.
@@ -18,11 +8,23 @@ The Python client for Nutanix Prism Versioned APIs is designed for Python client
 - Use standard methods for installation.
 
 ## Version
-- API version: v4.0.a1
-- Package version: 4.0.2a1
+- API version: v4.3
+- Package version: 4.3.1
+## Version Negotiation
+By default, the client negotiates the API version with the server to ensure compatibility. Version negotiation is **enabled by default**. To disable version negotiation and use a fixed API version, set the `allow_version_negotiation` parameter to `False` when creating the ApiClient:
+
+```python
+import ntnx_prism_py_client
+
+# Disable version negotiation
+api_client = ntnx_prism_py_client.ApiClient(allow_version_negotiation=False)
+```
+
+When version negotiation is disabled, the client will use the SDK's default API version.
+
 
 ## Requirements.
-Python 3.6, 3.7, and 3.8 are fully supported and tested.
+Python 3.6, 3.7, 3.8 and 3.9 are fully supported and tested.
 
 
 ## Installation & Usage
@@ -68,7 +70,7 @@ import ntnx_prism_py_client
 ## Getting Started
 
 ## Configuration
-The python client for Nutanix Prism Versioned APIs can be configured with the following parameters
+The python client for Nutanix Prism APIs can be configured with the following parameters
 
 | Parameter | Description                                                                      | Required | Default Value|
 |-----------|----------------------------------------------------------------------------------|----------|--------------|
@@ -81,9 +83,12 @@ The python client for Nutanix Prism Versioned APIs can be configured with the fo
 | verify_ssl| Verify SSL certificate of cluster the client will connect to                     | No       | True         |
 | max_retry_attempts| Maximum number of retry attempts while connecting to the cluster         | No       | 5            |
 | backoff_factor| A backoff factor to apply between attempts after the second try.             | No       | 3            |
+| max_redirects | Maximum number of redirects to follow                                        | No       | 10           |
 | logger_file | File location to which debug logs are written to                               | No       | N/A          |
 | connect_timeout | Connection timeout in milliseconds for all operations                      | No       | 30000        |
 | read_timeout | Read timeout in milliseconds for all operations                               | No       | 30000        |
+| download_directory| Directory where downloaded files will be stored in                       | No       | Current Working Directory|
+| download_chunk_size     | Chunk size in bytes for files to download                          | No       | 8*1024 bytes             |
 
 
 ### Sample Configuration
@@ -99,7 +104,7 @@ api_client = ApiClient(configuration=config)
 ### Proxy Configuration
 ```python
 config = Configuration()
-# Configure the cluster as shown above
+# Configure the cluster as shown previously along with the following proxy configuration
 # ...
 config.proxy_scheme = "https"
 config.proxy_host = "127.0.0.1"
@@ -109,8 +114,20 @@ config.proxy_password = "proxy_password"
 api_client = ApiClient(configuration=config)
 ```
 
+
+
 ### Authentication
-Nutanix APIs currently support HTTP Basic Authentication only, and the Python client can be configured using the username and password parameters to send Basic headers along with every request.
+Nutanix APIs currently support two type of authentication schemes:
+
+- **HTTP Basic Authentication**
+      - The Python client can be configured using the username and password parameters to send Basic headers along with every request.
+- **API Key Authentication**
+      - The Python client can be configured to set an API key to send "**X-ntnx-api-key**" header with every request.
+  ```python
+  config = Configuration()
+  config.set_api_key('abcde12345')
+  api_client = ApiClient(configuration=config)
+  ```
 
 ### Additional Headers
 The python client can be configured to send additional headers on each request.
@@ -121,18 +138,22 @@ client.add_default_header(header_name='Accept-Encoding', header_value='gzip, def
 ```
 
 ### Retry Mechanism
-The python client can be configured to retry requests that fail with the following status codes. The numbers of seconds before which the next retry is attempted is determined using the following formula:
-
-```{backoff factor} * (2 * ({number of retries so far} - 1))```
+The client can be configured to retry requests that fail with the following status codes. The numbers of seconds before which the next retry is attempted is determined by the retryInterval:
 
 - [408 - Request Timeout](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/408)
+- [429 - Too Many Requests](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429)
 - [502 - Bad Gateway](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502)
 - [503 - Service Unavailable](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503)
+
+The client will also redirect requests that fail with [302 - Found](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/302) to the new location specified in the response header `Location`.
+```{backoff factor} * (2 * ({number of retries so far} - 1))```
+
 
 ```python
 config = Configuration()
 config.max_retry_attempts = 3 # Max retry attempts while reconnecting on a loss of connection
 config.backoff_factor = 3 # Backoff factor to use during retry attempts
+config.max_redirects = 3 # Max number of redirects to follow
 client = ApiClient(configuration=config)
 ```
 
@@ -141,12 +162,13 @@ client = ApiClient(configuration=config)
 ### Invoking an operation
 ```python
 # Initialize the API
-system_defined_policies_api_instance = SystemDefinedPoliciesApi(api_client=client) # client configured in previous step
+categories_api_instance = CategoriesApi(api_client=client) # client configured in previous step
 extId = 'extId_example' # UUID.
 
-# Get a system defined alert policy based on policy ID.
+# Fetch a category
+
 try:
-    api_response = system_defined_policies_api_instance.get_sda_policy_by_id(extId)
+    api_response = categories_api_instance.get_category_by_id(extId)
 except ApiException as e:
 ```
 
@@ -155,21 +177,23 @@ Headers can be configured globally on the python client using the [method to set
 
 ```python
 # Initialize the API
-system_defined_policies_api_instance = SystemDefinedPoliciesApi(api_client=client) # client configured in previous step
+categories_api_instance = CategoriesApi(api_client=client) # client configured in previous step
 extId = 'extId_example' # UUID.
 
-# Get a system defined alert policy based on policy ID.
+# Fetch a category
+
 try:
-    api_response = system_defined_policies_api_instance.get_sda_policy_by_id(extId)
+    api_response = categories_api_instance.get_category_by_id(extId)
 except ApiException as e:
 
 # Extract E-Tag Header
 etag_value = ApiClient.get_etag(api_response)
 
-# Update a system defined alert policy.
+# Update a category
+
 try:
     # The body parameter in the following operation is received from the previous GET request's response which needs to be updated.
-    api_response = system_defined_policies_api_instance.update_sda_policy(body, extId, if_match=etag_value) # Use the extracted etag value
+    api_response = categories_api_instance.update_category_by_id(body, extId, if_match=etag_value) # Use the extracted etag value
 except ApiException as e:
 ```
 
@@ -182,17 +206,17 @@ List Operations for Nutanix APIs support pagination, filtering, sorting and proj
 | _limit    | specifies the total number of records returned in the result set. Must be a positive integer between 0 and 100. Any number out of this range will lead to a validation error. If the limit is not provided a default value of 50 records will be returned in the result set|
 | _filter   | allows clients to filter a collection of resources. The expression specified with $filter is evaluated for each resource in the collection, and only items where the expression evaluates to true are included in the response. Expression specified with the $filter must conform to the [OData V4.01 URL](https://docs.oasis-open.org/odata/odata/v4.01/odata-v4.01-part2-url-conventions.html#sec_SystemQueryOptionfilter) conventions. |
 | _orderby  | allows clients to specify the sort criteria for the returned list of objects. Resources can be sorted in ascending order using asc or descending order using desc. If asc or desc are not specified the resources will be sorted in ascending order by default. For example, 'orderby=templateName desc' would get all templates sorted by templateName in desc order. |
-| _select   | allows clients to request a specific set of properties for each entity or complex type. Expression specified with the $select must conform to the OData V4.01 URL conventions. If a $select expression consists of a single select item that is an asterisk (i.e. *), then all properties on the matching resource will be returned. |
-| _expand   | allows clients to request related resources when a resource that satisfies a particular request is retrieved. Each expand item is evaluated relative to the entity containing the property being expanded. Other query options can be applied to an expanded property by appending a semicolon-separated list of query options, enclosed in parentheses, to the property name. Allowed system query options are $filter,$select, $orderby. |
+| _select   | allows clients to request a specific set of properties for each entity or complex type. Expression specified with the $select must conform to the OData V4.01 URL conventions. If a $select expression consists of a single select item that is an asterisk (i.e., *), then all properties on the matching resource will be returned. |
+| _expand   | allows clients to request related resources when a resource that satisfies a particular request is retrieved. Each expanded item is evaluated relative to the entity containing the property being expanded. Other query options can be applied to an expanded property by appending a semicolon-separated list of query options, enclosed in parentheses, to the property name. Permissible system query options are $filter,$select and $orderby. |
 
 ```python
 # Initialize the API
-alerts_api_instance = AlertsApi(api_client=client) # client configured in previous step
+batches_api_instance = BatchesApi(api_client=client) # client configured in previous step
 extId = 'extId_example' # UUID.
 
-# Get the list of alerts.
+# Get a list of all the Batches.
 try:
-    api_response = alerts_api_instance.get_alerts(
+    api_response = batches_api_instance.list_batches(
 	                   _page=page, # if page parameter is present
 	                   _limit=limit, # if limit parameter is present
 	                   _filter=_filter, # if filter parameter is present
@@ -206,10 +230,17 @@ The list of filterable and sortable fields with expansion keys can be found in t
 
 ## API Reference
 
-This library has a full set of [API Reference Documentation](https://developers.nutanix.com/sdk-reference?namespace=prism&version=v4.0.a1&language=python). This documentation is auto-generated, and the location may change.
+This library has a full set of [API Reference Documentation](https://developers.nutanix.com/sdk-reference?namespace=prism&version=v4.3&language=python). This documentation is auto-generated, and the location may change.
 
 ## License
-This library is licensed under Nutanix proprietary license. Full license text is available in [LICENSE](https://developers.nutanix.com/license).
+This library is licensed under Apache 2.0 license. Full license text is available in [LICENSE](https://www.apache.org/licenses/LICENSE-2.0.txt).
 
 ## Contact us
 In case of issues please reach out to us at the [mailing list](mailto:sdk@nutanix.com)
+
+## Reporting Issues
+
+This repository is a lightly modified fork of Nutanix's official `ntnx-prism-py-client`.
+
+- **Issues with this specific patch** (the certifi constraint, or install/packaging problems it causes) — please use Kasm's central issue tracker: **[Kasm Workspaces Issue Tracker](https://github.com/kasmtech/workspaces-issues/issues)**
+- **Issues with the underlying SDK** (API behavior, authentication, retries, pagination, etc.) — please report these to Nutanix directly, as Kasm does not maintain the SDK code itself.
